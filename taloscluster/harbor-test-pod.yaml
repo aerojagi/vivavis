@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: harbor-test
+  namespace: device-manager
+spec:
+  containers:
+    - name: dm-test
+      image: 10.200.0.1:30002/device-manager/device-manager:20251118
+      command: ["sleep", "3600"]
+  restartPolicy: Never

@@ -1,0 +1,46 @@
+apiVersion: ceph.rook.io/v1
+kind: CephCluster
+metadata:
+  name: rook-ceph          # Clustername
+  namespace: rook-ceph     # muss ‚rook-ceph‘ sein
+spec:
+  cephVersion:
+    image: quay.io/ceph/ceph:v18.2.2
+    allowUnsupported: false
+
+  # Wo Rook seine Metadaten auf dem Host speichert
+  dataDirHostPath: /var/lib/rook
+
+  # Ueberwachungen
+  mon:
+    count: 3
+    allowMultiplePerNode: false
+
+  # Ceph dashboard (kann spaeter aktiviert werden)
+  dashboard:
+    enabled: true
+    ssl: false
+
+  # OSD-Speicherkonfiguration
+  storage:
+    # Alle Knoten werden verwendet
+    useAllNodes: true
+    # Nicht automatisch jede Festplatte verwenden, wir geben sie ausdrücklich an.
+    useAllDevices: false
+    devices:
+      - name: "sdb"        # Ihre zusaetzliche 100-GB-Festplatte auf jedem Knoten
+
+  # optional, aber praktisch) kleine Ressourcenanforderungen
+  resources:
+    mon:
+      requests:
+        cpu: "200m"
+        memory: "1Gi"
+    mgr:
+      requests:
+        cpu: "200m"
+        memory: "512Mi"
+    osd:
+      requests:
+        cpu: "200m"
+        memory: "1Gi"

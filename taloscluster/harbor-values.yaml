@@ -1,0 +1,49 @@
+expose:
+  type: nodePort
+  tls:
+    enabled: false  # start with HTTP only to keep things simple
+  nodePort:
+    name: nodeport
+    http:
+      port: 30080   # Harbor UI & registry HTTP
+    https:
+      port: 30443   # unused if tls.enabled=false, but can stay
+
+externalURL: http://10.200.0.1:30080  # choose one node IP (e.g. node1)
+
+harborAdminPassword: "Ids0Ids"   # set your admin password
+
+persistence:
+  enabled: true
+  resourcePolicy: "keep"   # keep PVCs if Helm release is deleted
+
+  persistentVolumeClaim:
+    registry:
+      storageClass: rook-ceph-block
+      accessMode: ReadWriteOnce
+      size: 50Gi
+
+    chartmuseum:
+      storageClass: rook-ceph-block
+      accessMode: ReadWriteOnce
+      size: 10Gi
+
+    jobservice:
+      storageClass: rook-ceph-block
+      accessMode: ReadWriteOnce
+      size: 5Gi
+
+    database:
+      storageClass: rook-ceph-block
+      accessMode: ReadWriteOnce
+      size: 10Gi
+
+    redis:
+      storageClass: rook-ceph-block
+      accessMode: ReadWriteOnce
+      size: 5Gi
+
+    trivy:
+      storageClass: rook-ceph-block
+      accessMode: ReadWriteOnce
+      size: 20Gi

@@ -1,0 +1,6 @@
+machine:
+  registries:
+    mirrors:
+      "10.200.0.1:30002":
+        endpoints:
+          - "http://10.200.0.1:30002"
