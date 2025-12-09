@@ -1,0 +1,165 @@
+# Ziel
+
+Diese Seite beschreibt, wie ein neuer Kubernetes-Cluster mit Talos Linux Schritt für Schritt erstellt und betriebsbereit geprüft wird – von der Image-Beschaffung über die Konfiguration bis zur Netzwerkinstallation (CNI).
+
+## Kurzüberblick (Talos Ablauf)
+
+1. **Booten** – Maschinen mit Talos-Image starten  
+2. **Konfigurieren** – CA/Secrets erzeugen, Maschinen-Configs generieren  
+3. **Anwenden** – Configs auf Control-Plane & Worker ausrollen  
+4. **Verbinden** – `talosctl` lokal konfigurieren  
+5. **Bootstrap** – Kubernetes initialisieren, `kubeconfig` holen (siehe z. B. `docs.siderolabs.com`)
+
+---
+
+## Voraussetzungen
+
+- **CLI**: `talosctl` auf deinem Admin-Rechner installieren (siehe Talos-Releases)  
+- **Netzwerkzugang**: Internetzugriff der Nodes (Container-Images, Zeit, ggf. Registry-Mirror/Air-Gap-Setup nach Talos-Doku)  
+- **Versionskompatibilität**: Verwende die exakt passende `talosctl`-Version zur Talos-Version, sonst treten schwer nachvollziehbare Fehler auf.  
+- **Talos-Image**: Aktuelles ISO aus der Image Factory laden (ggf. mit System-Extensions, z. B. QEMU-Agent für Proxmox oder iSCSI-Tools für Longhorn).  
+- **IPs**: Feste IPs für Control-Plane/Worker planen  
+
+---
+
+## Architektur & Designhinweise
+
+- Talos ist **immutable, API-only** (kein SSH/Shell). Verwaltung erfolgt ausschließlich via `talosctl`.  
+- Mehrere Control-Plane-Nodes sollten über einen **VIP/Load-Balancer** exponiert werden (`6443` K8s-API, `50000` Talos-API – je nach Setup).  
+- **CNI**: Talos kann mit der Standard-CNI (Flannel) betrieben werden oder bewusst mit `name: none` gepatcht werden, um z. B. Cilium oder Calico zu installieren.  
+- **Reproduzierbarkeit**: Nur `secrets.yaml` und Patch-Files in Git aufbewahren; Machine-Configs bei Bedarf neu mit `talosctl gen config` generieren.  
+
+---
+
+## Phase A – Vorbereitung
+
+- `talosctl` lokal installieren und Version dokumentieren.  
+- Cluster-Name & Control-Plane-Endpoint (IP/VIP`:6443`) festlegen.  
+- Talos-ISO aus der Image Factory laden; ggf. System-Extensions (QEMU-Agent, iSCSI) auswählen.  
+- Feste IPs/DNS/NTP definieren; Firewall-Ports freigeben (`6443` K8s-API, `50000` Talos-API/je nach LB).  
+
+---
+
+## Phase B – Boot & Config
+
+1. **Nodes vom Talos-ISO booten**  
+   - Läuft zunächst vollständig im RAM; schreibt nichts auf Disk bis zur Installation.
+
+2. **Auf dem Admin-Rechner Cluster-Configs erzeugen** (mit optionalen Patches):
+
+   ```bash
+   export CLUSTER_NAME=mycluster
+   export ENDPOINT=https://<CONTROL_PLANE_IP_or_VIP>:6443
+
+   # Optional: CNI deaktivieren (für Cilium/Calico später)
+   cat > patch.yaml <<'YAML'
+   cluster:
+     network:
+       cni:
+         name: none
+   YAML
+
+   talosctl gen config "$CLUSTER_NAME" "$ENDPOINT" \
+     --config-patch @patch.yaml
+
+
+Configs anwenden (Control-Plane zuerst, dann Worker):
+
+talosctl apply-config --insecure --nodes <CP_IP> --file controlplane.yaml
+talosctl apply-config --insecure --nodes <WORKER_IPs> --file worker.yaml
+
+
+talosctl Endpunkt & Node setzen, etcd bootstrappen, kubeconfig holen:
+
+export TALOSCONFIG=./talosconfig
+
+talosctl config endpoint <CP_IP>
+talosctl config node <CP_IP>
+
+talosctl bootstrap --nodes <CP_IP>
+talosctl kubeconfig --nodes <CP_IP>
+
+Phase C – Validierung
+
+Cluster-Gesundheit prüfen:
+
+kubectl --kubeconfig=./kubeconfig get nodes -o wide
+talosctl --nodes <CP_IP> --talosconfig=./talosconfig health
+
+
+Kern-Systempods (kube-system) laufen?
+
+DNS/Controller/Scheduler prüfen.
+
+Phase D – CNI wählen & installieren
+Variante 1: Flannel (Standard)
+
+Hinweis: In einigen Virtualisierungsumgebungen muss der Backend-Typ angepasst werden; bei VMware ggf. Host-Gateway statt VXLAN.
+
+Variante 2: Calico
+
+Empfohlen bei Bedarf an Netzwerkrichtlinien/Observability.
+
+Bei der Clustererstellung CNI deaktivieren (name: none, siehe Patch oben).
+
+Tigera-Operator installieren.
+
+Installation konfigurieren (Beispiel Nftables + VXLAN, Pod-CIDR 10.244.0.0/16):
+
+kubectl apply -f - <<'EOF'
+apiVersion: operator.tigera.io/v1
+kind: Installation
+metadata: { name: default }
+spec:
+  calicoNetwork:
+    bgp: Disabled
+    linuxDataplane: Nftables
+    ipPools:
+      - name: default-ipv4-ippool
+        cidr: 10.244.0.0/16
+        blockSize: 26
+        encapsulation: VXLAN
+        natOutgoing: Enabled
+        nodeSelector: all()
+---
+apiVersion: operator.tigera.io/v1
+kind: APIServer
+metadata: { name: default }
+EOF
+
+Variante 3: Cilium
+
+eBPF, ohne kube-proxy – in Talos gängig.
+
+CNI vorher deaktivieren und Cilium gemäß deren Anleitung installieren.
+
+Phase E – Betriebsbereitschaft
+
+kubectl get pods -n kube-system & CoreDNS-Auflösung testen.
+
+Storage/Ingress auswählen (z. B. Longhorn benötigt iSCSI-Tools, kann via Talos Image Factory als Extension eingebunden werden).
+
+Reproducible-Config-Workflow etablieren (Secrets + Patches versionieren; Configs bei Bedarf neu erzeugen).
+
+Beispiel: Minimal-Schnellstart (ein Control-Plane, zwei Worker)
+# 0) Talos ISO booten, IPs notieren
+
+# 1) Configs erzeugen
+talosctl gen config demo https://<CP_IP>:6443
+
+# 2) Control-Plane konfigurieren
+talosctl apply-config --insecure --nodes <CP_IP> --file controlplane.yaml
+
+# 3) Worker konfigurieren
+talosctl apply-config --insecure --nodes <W1_IP> --file worker.yaml
+talosctl apply-config --insecure --nodes <W2_IP> --file worker.yaml
+
+# 4) talosctl Endpunkt/Node setzen, etcd bootstrap
+export TALOSCONFIG=./talosconfig
+talosctl config endpoint <CP_IP>
+talosctl config node <CP_IP>
+talosctl bootstrap --nodes <CP_IP>
+talosctl kubeconfig --nodes <CP_IP>
+
+# 5) Validierung
+kubectl --kubeconfig=./kubeconfig get nodes -o wide
